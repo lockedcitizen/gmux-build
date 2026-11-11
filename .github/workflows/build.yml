@@ -1,0 +1,51 @@
+name: Build GMUX EFI
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gnu-efi build-essential
+      - name: Create Source Code
+        run: |
+          cat << 'EOF' > main.c
+          #include <efi.h>
+          #include <efilib.h>
+          static inline void outb(UINT16 port, UINT8 value) {
+              __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
+          }
+          EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+              InitializeLib(ImageHandle, SystemTable);
+              outb(0x728, 1);
+              outb(0x710, 2);
+              outb(0x740, 2); 
+              outb(0x750, 0);
+              uefi_call_wrapper(BS->Stall, 1, 2000000); 
+              return EFI_SUCCESS;
+          }
+          EOF
+          cat << 'EOF' > Makefile
+          ARCH = x86_64
+          OBJS = main.o
+          TARGET = gmux-mbp115.efi
+          EFIINC = /usr/include/efi
+          EFIINCS = -I$(EFIINC) -I$(EFIINC)/$(ARCH) -I$(EFIINC)/protocol
+          LIB = /usr/lib
+          EFILIB = /usr/lib
+          EFI_CRT_OBJS = $(EFILIB)/crt0-efi-$(ARCH).o
+          EFI_LDS = $(EFILIB)/elf_$(ARCH)_efi.lds
+          CFLAGS = $(EFIINCS) -fno-stack-protector -fPIC -fshort-wchar -mno-red-zone -Wall 
+          LDFLAGS = -nostdlib -znocombreloc -T $(EFI_LDS) -shared -Bsymbolic -L $(EFILIB) $(EFI_CRT_OBJS) 
+          all: $(TARGET)
+          gmux-mbp115.so: $(OBJS)
+          	ld $(LDFLAGS) $(OBJS) -o $@ -lefi -lgnuefi
+          %.efi: %.so
+          	objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc --target=efi-app-$(ARCH) $^ $@
+          EOF
+      - name: Compile
+        run: make
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmux-mbp115
+          path: gmux-mbp115.efi
